@@ -1,3 +1,8 @@
+import { Capacitor } from '@capacitor/core'
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
+import { Share } from '@capacitor/share'
+import { safeSetJson, safeGetJson } from './storageService.js'
+
 var BACKUP_KEYS = {
   profile: 'xianxianquan_profile',
   posts: 'xianxianquan_posts',
@@ -9,20 +14,32 @@ var BACKUP_KEYS = {
 
 function readKey(key) {
   try {
-    var raw = localStorage.getItem(key)
-    if (!raw) return null
-    return JSON.parse(raw)
+    return safeGetJson(key, null)
   } catch (e) {
+    console.error("[backup] readKey failed", {
+      key: key,
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
     return null
   }
 }
 
 function writeKey(key, value) {
   if (value === null || value === undefined) return
-  localStorage.setItem(key, JSON.stringify(value))
+  try {
+    safeSetJson(key, value)
+  } catch (e) {
+    console.error("[backup] writeKey failed", {
+      key: key,
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
+    throw e
+  }
 }
 
-export function exportBackup() {
+function collectBackupData() {
   var data = {}
   var keys = Object.keys(BACKUP_KEYS)
   for (var i = 0; i < keys.length; i++) {
@@ -36,32 +53,130 @@ export function exportBackup() {
   if (data.settings && data.settings.deepseekApiKey) {
     delete data.settings.deepseekApiKey
   }
+  return data
+}
+
+function formatTimestamp() {
+  var now = new Date()
+  var y = now.getFullYear()
+  var m = String(now.getMonth() + 1).padStart(2, '0')
+  var d = String(now.getDate()).padStart(2, '0')
+  var h = String(now.getHours()).padStart(2, '0')
+  var min = String(now.getMinutes()).padStart(2, '0')
+  var s = String(now.getSeconds()).padStart(2, '0')
+  return y + '-' + m + '-' + d + '-' + h + min + s
+}
+
+function buildBackupObject() {
+  console.log("[backup] collecting data")
+  var data = collectBackupData()
   var backup = {
     appName: '与法贤聊',
-    version: 1,
+    backupVersion: 2,
     exportedAt: Date.now(),
+    exportedAtText: formatTimestamp(),
     data: data
   }
   return backup
 }
 
-export function downloadBackup() {
-  var backup = exportBackup()
-  var json = JSON.stringify(backup, null, 2)
-  var now = new Date()
-  var y = now.getFullYear()
-  var m = String(now.getMonth() + 1).padStart(2, '0')
-  var d = String(now.getDate()).padStart(2, '0')
-  var filename = '与法贤聊-backup-' + y + '-' + m + '-' + d + '.json'
-  var blob = new Blob([json], { type: 'application/json' })
+function sanitizeForJson(value) {
+  try {
+    return JSON.parse(JSON.stringify(value))
+  } catch (e) {
+    return value
+  }
+}
+
+async function exportBackupNative() {
+  console.log("[backup] native export started")
+  console.log("[backup] platform:", Capacitor.getPlatform())
+
+  var backup = buildBackupObject()
+  backup.data = sanitizeForJson(backup.data)
+  var jsonText = JSON.stringify(backup, null, 2)
+
+  console.log("[backup] json generated", {
+    length: jsonText.length
+  })
+
+  var fileName = 'yufaxianliao-backup-' + formatTimestamp() + '.json'
+
+  console.log("[backup] writing file to cache:", fileName)
+
+  await Filesystem.writeFile({
+    path: fileName,
+    data: jsonText,
+    directory: Directory.Cache,
+    encoding: Encoding.UTF8,
+    recursive: true
+  })
+
+  console.log("[backup] file written")
+
+  var uriResult = await Filesystem.getUri({
+    path: fileName,
+    directory: Directory.Cache
+  })
+
+  console.log("[backup] share opening")
+
+  await Share.share({
+    title: '导出与法贤聊数据',
+    text: '与法贤聊本地数据备份',
+    url: uriResult.uri,
+    dialogTitle: '保存或分享备份文件'
+  })
+
+  console.log("[backup] share completed")
+
+  return { success: true, fileName: fileName }
+}
+
+function exportBackupWeb() {
+  console.log("[backup] web export started")
+
+  var backup = buildBackupObject()
+  backup.data = sanitizeForJson(backup.data)
+  var jsonText = JSON.stringify(backup, null, 2)
+
+  console.log("[backup] json generated", {
+    length: jsonText.length
+  })
+
+  var fileName = 'yufaxianliao-backup-' + formatTimestamp() + '.json'
+  var blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' })
   var url = URL.createObjectURL(blob)
   var a = document.createElement('a')
   a.href = url
-  a.download = filename
+  a.download = fileName
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+
+  setTimeout(function () {
+    URL.revokeObjectURL(url)
+  }, 1000)
+
+  console.log("[backup] web download triggered")
+
+  return { success: true, fileName: fileName }
+}
+
+export async function exportBackup() {
+  try {
+    if (Capacitor.isNativePlatform()) {
+      return await exportBackupNative()
+    }
+    return exportBackupWeb()
+  } catch (error) {
+    console.error("[backup] export failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined,
+      stack: error ? error.stack : undefined
+    })
+    throw error
+  }
 }
 
 export function validateBackup(text) {

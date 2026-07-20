@@ -1,6 +1,6 @@
 <template>
   <div v-if="visible && images && images.length" class="image-preview-overlay" @click="handleOverlayClick">
-    <img :src="images[currentIndex]" class="image-preview-img" @click.stop />
+    <img :src="displayImages[currentIndex]" class="image-preview-img" @click.stop />
     <button class="image-preview-close" @click.stop="close">✕</button>
     <button v-if="images.length > 1 && currentIndex > 0" class="image-preview-arrow left" @click.stop="prev">‹</button>
     <button v-if="images.length > 1 && currentIndex < images.length - 1" class="image-preview-arrow right" @click.stop="next">›</button>
@@ -9,7 +9,8 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { useImageUrls } from '../composables/useImageUrl.js'
 
 const props = defineProps({
   visible: Boolean,
@@ -19,6 +20,7 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 
 const currentIndex = ref(0)
+const displayImages = useImageUrls(computed(() => props.images || []))
 
 watch(() => props.visible, (val) => {
   if (val) {

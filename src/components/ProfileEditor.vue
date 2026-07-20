@@ -1,10 +1,12 @@
-﻿﻿﻿<template>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
   <div class="editor-overlay" @click.self="handleCancel">
     <div class="editor-modal">
       <div class="editor-header">
         <button class="btn-cancel" @click="handleCancel">取消</button>
         <span class="editor-title">编辑个人资料</span>
-        <button class="btn-save" @click="handleSave">保存</button>
+        <button class="btn-save" @click="handleSave" :disabled="avatarProcessing || coverProcessing">
+          {{ avatarProcessing || coverProcessing ? '正在处理图片...' : '保存' }}
+        </button>
       </div>
 
       <div class="editor-body">
@@ -12,7 +14,7 @@
           <label class="section-label">头像</label>
           <div class="avatar-preview-row">
             <div class="avatar-preview">
-              <img v-if="editData.avatar" :src="editData.avatar" alt="" class="preview-img" />
+              <img v-if="editData.avatar" :src="displayAvatar" alt="" class="preview-img" />
               <div v-else class="preview-default">{{ displayNickname.charAt(0) }}</div>
             </div>
             <label class="upload-btn">
@@ -36,7 +38,7 @@
           <label class="section-label">朋友圈背景</label>
           <div class="cover-preview-row">
             <div class="cover-preview" :style="coverPreviewStyle">
-              <span v-if="!editData.coverImage" class="cover-placeholder">默认背景</span>
+              <span v-if="!displayCover" class="cover-placeholder">默认背景</span>
             </div>
             <label class="upload-btn">
               <input type="file" accept="image/*" hidden @change="handleCoverSelect" />
@@ -50,9 +52,11 @@
 </template>
 
 <script setup>
-import { reactive, computed } from 'vue'
+import { reactive, computed, ref } from 'vue'
 import { getProfile, updateProfile } from '../services/profileService.js'
-import { readFileAsBase64 } from '../services/imageService.js'
+import { processProfileImage } from '../services/imageService.js'
+import { isNativePlatform, saveBase64Image, getProfileAvatarPath, getProfileCoverPath, deleteStoredFileSafe } from '../services/fileStorageService.js'
+import { useImageUrl } from '../composables/useImageUrl.js'
 
 const emit = defineEmits(['close', 'saved'])
 
@@ -64,42 +68,118 @@ const editData = reactive({
   bio: profile.bio || ''
 })
 
+const avatarProcessing = ref(false)
+const coverProcessing = ref(false)
+const oldAvatarPath = ref(profile.avatar || '')
+const oldCoverPath = ref(profile.coverImage || '')
+
+const displayAvatar = useImageUrl(computed(() => editData.avatar))
+const displayCover = useImageUrl(computed(() => editData.coverImage))
+
 const displayNickname = computed(() => {
   return editData.nickname.trim() || '我'
 })
 
 const coverPreviewStyle = computed(() => {
-  if (editData.coverImage) {
-    return { backgroundImage: 'url(' + editData.coverImage + ')' }
+  if (displayCover.value) {
+    return { backgroundImage: 'url(' + displayCover.value + ')' }
   }
   return {}
 })
 
 async function handleAvatarSelect(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  const base64 = await readFileAsBase64(file)
-  editData.avatar = base64
-  e.target.value = ''
+  const file = e.target.files?.[0]
+  if (!file) {
+    e.target.value = ''
+    return
+  }
+
+  avatarProcessing.value = true
+
+  try {
+    const result = await processProfileImage(file, { purpose: 'avatar' })
+    if (isNativePlatform()) {
+      const filePath = await saveBase64Image({
+        base64: result,
+        path: getProfileAvatarPath()
+      })
+      editData.avatar = filePath
+    } else {
+      editData.avatar = result
+    }
+    console.log("[profile-image] avatar save success")
+  } catch (error) {
+    console.error("[profile-image] avatar failed", {
+      name: error?.name,
+      message: error?.message,
+      stack: error?.stack
+    })
+    alert(error.message || "图片处理失败，请重新选择")
+  } finally {
+    avatarProcessing.value = false
+    e.target.value = ''
+  }
 }
 
 async function handleCoverSelect(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  const base64 = await readFileAsBase64(file)
-  editData.coverImage = base64
-  e.target.value = ''
+  const file = e.target.files?.[0]
+  if (!file) {
+    e.target.value = ''
+    return
+  }
+
+  coverProcessing.value = true
+
+  try {
+    const result = await processProfileImage(file, { purpose: 'cover' })
+    if (isNativePlatform()) {
+      const filePath = await saveBase64Image({
+        base64: result,
+        path: getProfileCoverPath()
+      })
+      editData.coverImage = filePath
+    } else {
+      editData.coverImage = result
+    }
+    console.log("[profile-image] cover save success")
+  } catch (error) {
+    console.error("[profile-image] cover failed", {
+      name: error?.name,
+      message: error?.message,
+      stack: error?.stack
+    })
+    alert(error.message || "图片处理失败，请重新选择")
+  } finally {
+    coverProcessing.value = false
+    e.target.value = ''
+  }
 }
 
 function handleSave() {
-  updateProfile({
-    nickname: editData.nickname.trim() || '我',
-    avatar: editData.avatar,
-    coverImage: editData.coverImage,
-    bio: editData.bio.trim()
-  })
-  emit('saved')
-  emit('close')
+  try {
+    updateProfile({
+      nickname: editData.nickname.trim() || '我',
+      avatar: editData.avatar,
+      coverImage: editData.coverImage,
+      bio: editData.bio.trim()
+    })
+
+    if (oldAvatarPath.value && oldAvatarPath.value !== editData.avatar) {
+      deleteStoredFileSafe(oldAvatarPath.value)
+    }
+    if (oldCoverPath.value && oldCoverPath.value !== editData.coverImage) {
+      deleteStoredFileSafe(oldCoverPath.value)
+    }
+
+    emit('saved')
+    emit('close')
+  } catch (error) {
+    console.error("[profile-image] save failed", {
+      name: error?.name,
+      message: error?.message
+    })
+    alert(error.message || "资料保存失败，请稍后重试")
+  }
 }
 
 function handleCancel() {
@@ -135,6 +215,7 @@ function handleCancel() {
   font-weight: 500; cursor: pointer;
 }
 .btn-save:hover { background-color: #06ad56; }
+.btn-save:disabled { background-color: #ccc; cursor: not-allowed; }
 .editor-body { padding: 16px 20px 20px; }
 .editor-section { margin-bottom: 18px; }
 .editor-section:last-child { margin-bottom: 0; }

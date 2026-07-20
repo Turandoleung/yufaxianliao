@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
   <div class="post-card" @click="emit('open-detail', post.id)">
     <div class="post-header">
       <div class="post-avatar">
@@ -6,7 +6,7 @@
           <div class="avatar-sage">{{ sageAvatarText }}</div>
         </template>
         <template v-else>
-          <img v-if="profile && profile.avatar" :src="profile.avatar" alt="" class="avatar-img" />
+          <img v-if="profile && profile.avatar" :src="displayAvatar" alt="" class="avatar-img" />
           <div v-else class="avatar-default">{{ displayNickname.charAt(0) }}</div>
         </template>
       </div>
@@ -38,8 +38,8 @@
     </div>
 
     <div class="post-footer">
-      <button class="action-btn" :class="{ liked: post.liked }" @click.stop="handleLike">
-        {{ post.liked ? '♥ 已赞' : '♡ 赞' }}
+      <button class="action-btn" :class="{ liked: userLiked }" @click.stop="handleLike">
+        {{ userLiked ? '♥ 已赞' : '♡ 赞' }}
         <span v-if="post.likeCount">({{ post.likeCount }})</span>
       </button>
       <button class="action-btn" @click.stop="emit('open-detail', post.id)">
@@ -105,6 +105,7 @@ import ImageGrid from './ImageGrid.vue'
 import LikeList from './LikeList.vue'
 import MusicCard from './MusicCard.vue'
 import { philosophers } from '../data/philosophers.js'
+import { useImageUrl } from '../composables/useImageUrl.js'
 
 function isSagePost(post) {
   return post?.isDailySage === true || post?.authorType === 'sage'
@@ -140,12 +141,20 @@ const displayNickname = computed(() => {
   return getPostAuthorName(props.post, props.profile)
 })
 
+const avatarRef = computed(() => (props.profile && props.profile.avatar) || '')
+const displayAvatar = useImageUrl(avatarRef)
+
 const isSage = computed(() => isSagePost(props.post))
 
 const sageAvatarText = computed(() => {
   var name = getPostAuthorName(props.post, props.profile)
   return getSageAvatarText(name)
 })
+
+const userLiked = computed(() =>
+  Array.isArray(props.post.likedBy)
+  && props.post.likedBy.some(item => item?.id === 'user')
+)
 
 const canEdit = computed(() => {
   return !props.post.isDailySage && props.post.authorType !== 'sage'
@@ -174,6 +183,7 @@ function handleEditPost() {
 
 function handleDeletePost() {
   showMenu.value = false
+  console.log("[delete] button clicked:", props.post.id)
   if (confirm('确定要删除这条动态吗？')) {
     emit('delete-post', props.post.id)
   }

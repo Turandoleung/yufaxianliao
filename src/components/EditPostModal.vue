@@ -16,7 +16,7 @@
 
       <div class="image-preview-area" v-if="draft.images.length">
         <div class="preview-grid">
-          <div v-for="(img, i) in draft.images" :key="i" class="preview-item">
+          <div v-for="(img, i) in displayImages" :key="i" class="preview-item">
             <img :src="img" alt="" />
             <button class="remove-btn" @click="removeImage(i)">x</button>
           </div>
@@ -37,7 +37,7 @@
             + 封面图
           </label>
           <div v-else class="music-cover-preview">
-            <img :src="draft.music.cover" alt="" />
+            <img :src="displayMusicCover" alt="" />
             <button class="remove-btn" @click="draft.music.cover = ''">x</button>
           </div>
         </div>
@@ -90,7 +90,9 @@
 
 <script setup>
 import { ref, reactive, computed } from 'vue'
-import { processImages, readMusicCoverAsBase64 } from '../services/imageService.js'
+import { processImages, readMusicCoverAsBase64, processImagesForPost, isNativePlatform } from '../services/imageService.js'
+import { useImageUrls, useImageUrl } from '../composables/useImageUrl.js'
+import { saveBase64Image, getPostMusicCoverPath, deleteStoredFile } from '../services/fileStorageService.js'
 
 const props = defineProps({ post: Object })
 const emit = defineEmits(['save', 'cancel'])
@@ -102,6 +104,9 @@ const draft = reactive({
   location: '',
   tags: []
 })
+
+const displayImages = useImageUrls(computed(() => draft.images))
+const displayMusicCover = useImageUrl(computed(() => draft.music.cover))
 
 const showMusicForm = ref(false)
 const showLocationForm = ref(false)
@@ -170,7 +175,9 @@ async function handleImageSelect(e) {
     alert('最多只能选择 9 张图片')
     files.splice(remaining)
   }
-  const newImages = await processImages(files)
+  const newImages = isNativePlatform()
+    ? await processImagesForPost(files, props.post.id, draft.images.length)
+    : await processImages(files)
   draft.images.push(...newImages)
   e.target.value = ''
 }
@@ -179,7 +186,15 @@ async function handleCoverSelect(e) {
   var file = e.target.files && e.target.files[0]
   if (!file) return
   try {
-    draft.music.cover = await readMusicCoverAsBase64(file)
+    var base64 = await readMusicCoverAsBase64(file)
+    if (isNativePlatform()) {
+      draft.music.cover = await saveBase64Image({
+        base64: base64,
+        path: getPostMusicCoverPath(props.post.id)
+      })
+    } else {
+      draft.music.cover = base64
+    }
   } catch (err) {
     alert('封面图处理失败')
   }
@@ -187,7 +202,11 @@ async function handleCoverSelect(e) {
 }
 
 function removeImage(index) {
+  var removed = draft.images[index]
   draft.images.splice(index, 1)
+  if (isNativePlatform() && typeof removed === 'string' && removed.indexOf('posts/') === 0) {
+    deleteStoredFile(removed).catch(function() {})
+  }
 }
 
 function clearMusic() {

@@ -1,6 +1,6 @@
-﻿﻿<template>
+﻿﻿﻿﻿<template>
   <div class="image-grid" :class="gridClass">
-    <div v-for="(img, index) in images" :key="index" class="image-item" @click="$emit('open-preview', { images, index })">
+    <div v-for="(img, index) in displayImages" :key="index" class="image-item" @click="$emit('open-preview', { images, index })">
       <img :src="img" alt="" />
     </div>
   </div>
@@ -8,9 +8,12 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useImageUrls } from '../composables/useImageUrl.js'
 
 const props = defineProps({ images: Array })
 defineEmits(['open-preview'])
+
+const displayImages = useImageUrls(computed(() => props.images || []))
 
 const gridClass = computed(() => {
   const len = props.images.length

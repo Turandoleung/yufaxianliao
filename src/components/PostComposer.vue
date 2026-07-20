@@ -1,10 +1,20 @@
-﻿﻿﻿﻿﻿﻿﻿<template>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
   <div class="composer-overlay" @click.self="handleClose">
     <div class="composer">
       <div class="composer-header">
-        <button class="btn-cancel" @click="handleClose">取消</button>
+        <button class="btn-cancel" @click="handleClose" :disabled="publishing">取消</button>
         <span class="composer-title">发布动态</span>
-        <button class="btn-publish" :disabled="!canPublish" @click="handlePublish">发布</button>
+        <button
+          class="btn-publish"
+          :disabled="!canPublish || publishing"
+          @click="handlePublish"
+        >
+          {{ publishing ? '发布中...' : '发布' }}
+        </button>
+      </div>
+
+      <div v-if="publishError" class="publish-error">
+        {{ publishError }}
       </div>
 
       <div v-if="draftRestored" class="draft-hint">已恢复上次未发布的草稿</div>
@@ -18,7 +28,7 @@
 
       <div class="image-preview-area" v-if="previewImages.length">
         <div class="preview-grid">
-          <div v-for="(img, i) in previewImages" :key="i" class="preview-item">
+          <div v-for="(img, i) in displayPreviewImages" :key="i" class="preview-item">
             <img :src="img" alt="" />
             <button class="remove-btn" @click="removeImage(i)">x</button>
           </div>
@@ -39,7 +49,7 @@
             + 封面图
           </label>
           <div v-else class="music-cover-preview">
-            <img :src="musicCover" alt="" />
+            <img :src="displayMusicCover" alt="" />
             <button class="remove-btn" @click="musicCover = ''">x</button>
           </div>
         </div>
@@ -108,17 +118,32 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import { processImages, readMusicCoverAsBase64 } from '../services/imageService.js'
+import { processImages, readMusicCoverAsBase64, processImagesForDraft, isNativePlatform } from '../services/imageService.js'
 import { getDraft, saveDraft, clearDraft, isDraftEmpty } from '../services/draftService.js'
+import { useImageUrls, useImageUrl } from '../composables/useImageUrl.js'
+import { saveBase64Image, getDraftMusicCoverPath, clearDraftFiles, deleteStoredFile } from '../services/fileStorageService.js'
+
+const props = defineProps({
+  publishing: {
+    type: Boolean,
+    default: false
+  },
+  publishError: {
+    type: String,
+    default: ''
+  }
+})
 
 const emit = defineEmits(['close', 'published'])
 const content = ref('')
 const previewImages = ref([])
+const displayPreviewImages = useImageUrls(previewImages)
 const showMusicForm = ref(false)
 const musicTitle = ref('')
 const musicArtist = ref('')
 const musicUrl = ref('')
 const musicCover = ref('')
+const displayMusicCover = useImageUrl(musicCover)
 const draftRestored = ref(false)
 const showConfirm = ref(false)
 const location = ref('')
@@ -239,7 +264,9 @@ async function handleImageSelect(e) {
     alert('最多只能选择 9 张图片')
     files.splice(remaining)
   }
-  const newImages = await processImages(files)
+  const newImages = isNativePlatform()
+    ? await processImagesForDraft(files, previewImages.value.length)
+    : await processImages(files)
   previewImages.value.push(...newImages)
   e.target.value = ''
 }
@@ -248,14 +275,28 @@ async function handleCoverSelect(e) {
   var file = e.target.files && e.target.files[0]
   if (!file) return
   try {
-    musicCover.value = await readMusicCoverAsBase64(file)
+    var base64 = await readMusicCoverAsBase64(file)
+    if (isNativePlatform()) {
+      musicCover.value = await saveBase64Image({
+        base64: base64,
+        path: getDraftMusicCoverPath()
+      })
+    } else {
+      musicCover.value = base64
+    }
   } catch (err) {
     alert('封面图处理失败')
   }
   e.target.value = ''
 }
 
-function removeImage(index) { previewImages.value.splice(index, 1) }
+function removeImage(index) {
+  var removed = previewImages.value[index]
+  previewImages.value.splice(index, 1)
+  if (isNativePlatform() && typeof removed === 'string' && removed.indexOf('draft/') === 0) {
+    deleteStoredFile(removed).catch(function() {})
+  }
+}
 
 function clearMusic() {
   musicTitle.value = ''
@@ -299,17 +340,53 @@ function addSuggestedTag(s) {
 }
 
 function handlePublish() {
-  if (!canPublish.value) return
+  if (!canPublish.value || props.publishing) return
+
   var music = null
   if (musicTitle.value.trim()) {
     music = {
-      title: musicTitle.value.trim(),
-      artist: musicArtist.value.trim(),
-      url: musicUrl.value.trim(),
-      cover: musicCover.value
+      title: String(musicTitle.value).trim(),
+      artist: String(musicArtist.value).trim(),
+      url: String(musicUrl.value).trim(),
+      cover: String(musicCover.value)
     }
   }
-  emit('published', content.value.trim(), [...previewImages.value], music, location.value.trim(), tags.value.slice())
+
+  var safeImages = []
+  if (Array.isArray(previewImages.value)) {
+    for (var i = 0; i < previewImages.value.length; i++) {
+      if (typeof previewImages.value[i] === 'string') {
+        safeImages.push(previewImages.value[i])
+      }
+    }
+  }
+
+  var payload = {
+    content: String(content.value || '').trim(),
+    images: safeImages,
+    music: music,
+    location: String(location.value || '').trim(),
+    tags: Array.isArray(tags.value) ? tags.value.slice() : []
+  }
+
+  console.log("[publish] button clicked")
+  console.log("[publish] platform:", window.Capacitor && window.Capacitor.getPlatform ? window.Capacitor.getPlatform() : "web")
+  console.log("[publish] content length:", payload.content ? payload.content.length : 0)
+  console.log("[publish] payload created")
+
+  try {
+    emit('published', payload)
+
+    onPublishSuccess()
+  } catch (error) {
+    console.error("[publish] emit failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+  }
+}
+
+function onPublishSuccess() {
   content.value = ''
   previewImages.value = []
   musicTitle.value = ''
@@ -324,7 +401,6 @@ function handlePublish() {
   showTagForm.value = false
   draftRestored.value = false
   clearDraft()
-  emit('close')
 }
 
 onMounted(() => {
@@ -361,6 +437,12 @@ onMounted(() => {
 }
 .btn-publish:disabled { background-color: #a0e8b8; cursor: not-allowed; }
 .btn-publish:not(:disabled):hover { background-color: #06ad56; }
+.publish-error {
+  background: #FFF0F0; color: #D32F2F; font-size: 13px;
+  border-radius: 8px; padding: 8px 12px; margin-bottom: 10px;
+  line-height: 1.5;
+  border: 1px solid #FFCDD2;
+}
 .draft-hint {
   background: #FFF8E1; color: #8D6E00; font-size: 13px;
   border-radius: 8px; padding: 8px 12px; margin-bottom: 10px;

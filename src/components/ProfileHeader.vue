@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿<template>
+﻿﻿﻿﻿﻿﻿﻿﻿<template>
   <div class="profile-hero">
     <div class="cover-area" :style="coverStyle">
       <div class="cover-mask"></div>
@@ -44,7 +44,7 @@
       <div class="hero-nickname">{{ nickname }}</div>
 
       <div class="hero-avatar-wrap">
-        <img v-if="profile && profile.avatar" :src="profile.avatar" alt="" class="hero-avatar" />
+        <img v-if="profile && profile.avatar" :src="displayAvatar" alt="" class="hero-avatar" />
         <div v-else class="hero-avatar-default">{{ nickname.charAt(0) }}</div>
       </div>
     </div>
@@ -57,17 +57,25 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useImageUrl } from '../composables/useImageUrl.js'
+import { toRef } from 'vue'
 
 const props = defineProps({ profile: Object, calendarActive: Boolean })
 const emit = defineEmits(['edit-profile', 'open-composer', 'open-settings', 'toggle-calendar'])
+
+const avatarRef = computed(() => (props.profile && props.profile.avatar) || '')
+const coverRef = computed(() => (props.profile && props.profile.coverImage) || '')
+
+const displayAvatar = useImageUrl(avatarRef)
+const displayCover = useImageUrl(coverRef)
 
 const nickname = computed(() => {
   return (props.profile && props.profile.nickname) || '我'
 })
 
 const coverStyle = computed(() => {
-  if (props.profile && props.profile.coverImage) {
-    return { backgroundImage: 'url(' + props.profile.coverImage + ')' }
+  if (displayCover.value) {
+    return { backgroundImage: 'url(' + displayCover.value + ')' }
   }
   return {}
 })

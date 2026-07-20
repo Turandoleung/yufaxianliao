@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { philosophers } from '../data/philosophers.js'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import { philosophers } from '../data/philosophers.js'
 
 export function getRandomPhilosopher() {
   var index = Math.floor(Math.random() * philosophers.length)
@@ -83,18 +83,52 @@ export function getLengthConfig(commentLength) {
   return config
 }
 
-export function buildPrompt({ content, philosopher, commentTone, commentLength, location, tags }) {
-  var text = content || '（图文动态）'
+export function buildPostContext(post) {
+  var sections = []
+  var content = String(post && post.content ? post.content : '').trim()
+
+  if (content) {
+    sections.push(content)
+  }
+
+  var imageCount = (post && Array.isArray(post.images)) ? post.images.length : 0
+  if (imageCount > 0) {
+    sections.push('（用户还附带了 ' + imageCount + ' 张图片，但你无法直接查看图片，请主要根据文字内容评论。）')
+  }
+
+  var musicTitle = String((post && post.music && post.music.title) || '').trim()
+  var musicArtist = String((post && post.music && post.music.artist) || '').trim()
+  if (musicTitle || musicArtist) {
+    var parts = []
+    if (musicTitle) parts.push('歌名《' + musicTitle + '》')
+    if (musicArtist) parts.push('歌手：' + musicArtist)
+    sections.push('用户分享的音乐：' + parts.join('，'))
+  }
+
+  var location = String((post && post.location) || '').trim()
+  if (location) {
+    sections.push('发布地点：' + location)
+  }
+
+  var tags = (post && Array.isArray(post.tags)) ? post.tags : []
+  var safeTags = []
+  for (var i = 0; i < tags.length && i < 5; i++) {
+    var t = String(tags[i] || '').trim()
+    if (t) safeTags.push(t)
+  }
+  if (safeTags.length > 0) {
+    sections.push('用户标签：' + safeTags.map(function(t) { return '#' + t }).join(' '))
+  }
+
+  return sections.join('\n\n')
+}
+
+export function buildPrompt({ post, philosopher, commentTone, commentLength }) {
+  var postContext = buildPostContext(post)
+  var text = postContext || '（图文动态）'
   var toneInfo = getTonePrompt(commentTone || 'gentle')
   var lengthInfo = getLengthConfig(commentLength || 'standard')
-  var result = '有人发了一条朋友圈："' + text + '"\n'
-  if (location && location.trim()) {
-    result += '用户发布地点：' + location.trim() + '\n'
-  }
-  if (tags && Array.isArray(tags) && tags.length) {
-    result += '用户给这条动态添加了标签：' + tags.map(function(t) { return '#' + t }).join(' ') + '\n'
-  }
-  result += '\n'
+  var result = '有人发了一条朋友圈，内容如下：\n\n' + text + '\n\n'
   result += '请以' + philosopher.name + '的身份，用你的风格对此评论。\n\n'
   result += '用户当前选择的点评风格是：【' + toneInfo.label + '】\n'
   result += '风格要求：' + toneInfo.prompt + '\n\n'
@@ -150,9 +184,15 @@ export function sanitizeAiComment(text, maxChars) {
   return result
 }
 
-export async function generateAiComment({ content, philosopher, apiKey, commentTone, commentLength, location }) {
-  var prompt = buildPrompt({ content, philosopher, commentTone, commentLength, location })
+export async function generateAiComment({ post, philosopher, apiKey, commentTone, commentLength }) {
+  var prompt = buildPrompt({ post, philosopher, commentTone, commentLength })
   var lengthConfig = getLengthConfig(commentLength || 'standard')
+
+  console.log("[deepseek] payload check", {
+    systemType: typeof philosopher.systemPrompt,
+    userType: typeof prompt,
+    userLength: prompt.length
+  })
 
   var response = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',

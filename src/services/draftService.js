@@ -1,4 +1,6 @@
-﻿﻿﻿﻿const DRAFT_KEY = 'xianxianquan_post_draft'
+﻿﻿﻿﻿﻿import { safeSetJson, safeGetJson, safeRemoveItem } from './storageService.js'
+
+const DRAFT_KEY = 'xianxianquan_post_draft'
 
 function createEmptyDraft() {
   return { content: '', images: [], music: null, location: '', tags: [], updatedAt: 0 }
@@ -23,12 +25,15 @@ export function normalizeDraft(draft) {
 
 export function getDraft() {
   try {
-    var data = localStorage.getItem(DRAFT_KEY)
+    var data = safeGetJson(DRAFT_KEY)
     if (!data) return createEmptyDraft()
-    var parsed = JSON.parse(data)
-    return normalizeDraft(parsed)
+    return normalizeDraft(data)
   } catch (e) {
-    try { localStorage.removeItem(DRAFT_KEY) } catch (x) {}
+    console.error("[draft] getDraft failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
+    try { safeRemoveItem(DRAFT_KEY) } catch (x) { /* ignore */ }
     return createEmptyDraft()
   }
 }
@@ -37,16 +42,24 @@ export function saveDraft(draft) {
   var d = normalizeDraft(draft)
   d.updatedAt = Date.now()
   try {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(d))
+    safeSetJson(DRAFT_KEY, d)
     return true
   } catch (e) {
-    console.error('[Draft] save failed:', e)
+    console.error("[draft] saveDraft failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
     return false
   }
 }
 
 export function clearDraft() {
-  try { localStorage.removeItem(DRAFT_KEY) } catch (e) {}
+  try { safeRemoveItem(DRAFT_KEY) } catch (e) {
+    console.error("[draft] clearDraft failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
+  }
 }
 
 export function isDraftEmpty(draft) {

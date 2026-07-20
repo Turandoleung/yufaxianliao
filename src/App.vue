@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
   <div class="app">
     <ProfileHeader
       :profile="profile"
@@ -89,7 +89,9 @@
       @filter-by-tag="filterByTag"
     /><PostComposer
       v-if="showComposer"
-      @close="showComposer = false"
+      :publishing="publishing"
+      :publish-error="publishError"
+      @close="handleComposerClose"
       @published="handlePublished"
     />
 
@@ -125,18 +127,23 @@
       @save="handleEditSave"
       @cancel="handleEditCancel"
     />
+
+    <div v-if="toastMessage" class="toast-message" @click="toastMessage = ''">{{ toastMessage }}</div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getPosts, createPost, updatePost, updatePostContent, addComment, deletePost, deleteComment, addAiPlaceholder, updateAiComment, addCommentReply, updateCommentReply } from './services/postService.js'
+import { getPosts, createPost, updatePost, updatePostContent, addComment, deletePost, deleteComment, addAiPlaceholder, updateAiComment, addCommentReply, updateCommentReply, toggleLike as togglePostLike } from './services/postService.js'
+import { isNativePlatform, getPostImagePath, getPostMusicCoverPath, clearDraftFiles, copyFile, deleteStoredDirectory } from './services/fileStorageService.js'
 import { getProfile } from './services/profileService.js'
 import { getApiKey, isAiCommentEnabled, getCommentTone, getCommentLength, getAiLikeFrequency } from './services/settingsService.js'
 import { getRandomPhilosopher, generateAiComment, generateAiReply, getPhilosopherByName } from './services/aiService.js'
 import { generateAiLikes } from './services/aiLikeService.js'
 import { philosophers } from './data/philosophers.js'
-import { generateDailySagePostIfNeeded } from './services/dailySageService.js'
+import { triggerDailySageAfterUserPost } from './services/dailySageService.js'
+import { logStorageStats } from './services/storageService.js'
+import { clearDraft as clearDraftService } from './services/draftService.js'
 import ProfileHeader from './components/ProfileHeader.vue'
 import ProfileEditor from './components/ProfileEditor.vue'
 import PostComposer from './components/PostComposer.vue'
@@ -155,6 +162,9 @@ const profile = ref({})
 const showComposer = ref(false)
 const showProfileEditor = ref(false)
 const showSettings = ref(false)
+const publishing = ref(false)
+const publishError = ref('')
+const toastMessage = ref('')
 const selectedPhilosopher = ref(null)
 const showPhilosopherCard = ref(false)
 const imagePreviewVisible = ref(false)
@@ -170,7 +180,9 @@ const showCalendar = ref(false)
 
 const selectedPost = computed(() => {
   if (!selectedPostId.value) return null
-  return posts.value.find(p => p.id === selectedPostId.value) || null
+  return posts.value.find(function(p) {
+    return String(p.id) === String(selectedPostId.value)
+  }) || null
 })
 
 const visiblePosts = computed(() => {
@@ -211,51 +223,202 @@ function loadProfile() {
 
 function loadSettings() {}
 
-function handlePublished(content, images, music, location, tags) {
-  var post = createPost({ content, images, music, location, tags })
+function handleComposerClose() {
+  showComposer.value = false
+  publishError.value = ''
+  publishing.value = false
+}
 
-  var frequency = getAiLikeFrequency()
-  if (frequency !== 'off') {
+async function handlePublished(payload) {
+  publishError.value = ''
+  publishing.value = true
+
+  console.log("[publish] button clicked")
+  console.log("[publish] platform:", window.Capacitor && window.Capacitor.getPlatform ? window.Capacitor.getPlatform() : "web")
+  console.log("[publish] App handler received")
+
+  var postId = Date.now()
+
+  try {
+    var finalImages = payload.images || []
+    var finalMusic = payload.music ? { ...payload.music } : null
+
+    if (isNativePlatform()) {
+      var migratedImages = []
+      for (var i = 0; i < finalImages.length; i++) {
+        var img = finalImages[i]
+        if (typeof img === 'string' && img.indexOf('draft/') !== -1) {
+          try {
+            var postPath = getPostImagePath(postId, i)
+            await copyFile(img, postPath)
+            migratedImages.push(postPath)
+          } catch (e) {
+            console.error("[publish] migrate image failed", { index: i, error: e?.message })
+            migratedImages.push(img)
+          }
+        } else {
+          migratedImages.push(img)
+        }
+      }
+      finalImages = migratedImages
+
+      if (finalMusic && finalMusic.cover && typeof finalMusic.cover === 'string' && finalMusic.cover.indexOf('draft/') !== -1) {
+        try {
+          var coverPath = getPostMusicCoverPath(postId)
+          await copyFile(finalMusic.cover, coverPath)
+          finalMusic.cover = coverPath
+        } catch (e) {
+          console.error("[publish] migrate music cover failed", { error: e?.message })
+        }
+      }
+
+      clearDraftFiles()
+    }
+
+    var newPost = createPost({
+      content: payload.content,
+      images: finalImages,
+      music: finalMusic,
+      location: payload.location,
+      tags: payload.tags,
+      id: postId
+    })
+
+    console.log("[publish] save success, post id:", newPost.id)
+
+    loadData()
+    clearDraftData()
+    showComposer.value = false
+
+    void triggerAiLikesAsync(newPost)
+
+    void triggerAiCommentAsync(newPost)
+
+    try {
+      var sagePost = triggerDailySageAfterUserPost()
+      if (sagePost) {
+        loadData()
+      }
+    } catch (sageError) {
+      console.error("[daily-sage] generate failed", {
+        name: sageError ? sageError.name : undefined,
+        message: sageError ? sageError.message : undefined
+      })
+    }
+  } catch (error) {
+    console.error("[publish] failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined,
+      stack: error ? error.stack : undefined
+    })
+
+    publishError.value = error instanceof Error
+      ? error.message
+      : "发布失败，请稍后重试"
+
+    logStorageStats()
+  } finally {
+    publishing.value = false
+  }
+}
+
+function clearDraftData() {
+  try {
+    clearDraftService()
+  } catch (e) {
+    console.error("[publish] clear draft failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
+  }
+}
+
+async function triggerAiLikesAsync(newPost) {
+  try {
+    var frequency = getAiLikeFrequency()
+    if (frequency === 'off') return
+
     var aiLikers = generateAiLikes({
       philosophers: philosophers,
       frequency: frequency,
-      existingLikedBy: post.likedBy || []
+      existingLikedBy: newPost.likedBy || []
     })
+
     if (aiLikers.length > 0) {
-      var currentLikedBy = post.likedBy || []
+      var currentLikedBy = newPost.likedBy || []
       var merged = currentLikedBy.concat(aiLikers)
-      updatePost(post.id, { likedBy: merged, likeCount: merged.length })
+      var userLiked = merged.some(function(item) { return item && item.id === 'user' })
+      updatePost(newPost.id, { likedBy: merged, likeCount: merged.length, liked: userLiked })
+      loadData()
     }
+  } catch (error) {
+    console.error("[ai-likes] failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
   }
+}
 
-  loadData()
+async function triggerAiCommentAsync(newPost) {
+  var placeholder = null
 
-  if (isAiCommentEnabled()) {
-    var apiKey = getApiKey()
-    if (!apiKey) {
-      console.warn('[AI] 先贤评论已开启，但未填写 API Key')
+  try {
+    if (!isAiCommentEnabled()) {
+      console.log("[ai-comment] skipped: AI comments disabled in settings")
+      showToast("先贤自动评论未开启，请在设置中开启")
       return
     }
 
+    var apiKey = getApiKey()
+    if (!apiKey) {
+      console.log("[ai-comment] skipped: no API key configured")
+      showToast("未配置 DeepSeek API Key，先贤无法评论")
+      return
+    }
+
+    console.log("[ai-comment] post context", {
+      postId: newPost.id,
+      contentLength: String(newPost.content || "").length,
+      imageCount: Array.isArray(newPost.images) ? newPost.images.length : 0,
+      hasMusic: Boolean(newPost.music),
+      musicTitle: String((newPost.music && newPost.music.title) || ""),
+      musicArtist: String((newPost.music && newPost.music.artist) || ""),
+      tagCount: Array.isArray(newPost.tags) ? newPost.tags.length : 0
+    })
+
     var philosopher = getRandomPhilosopher()
-    var placeholder = addAiPlaceholder(post.id, philosopher.name)
+    console.log("[ai-comment] starting for post", newPost.id, "philosopher:", philosopher.name)
+    placeholder = addAiPlaceholder(newPost.id, philosopher.name)
     loadData()
 
-    generateAiComment({
-      content: content + (music ? ' [分享音乐：' + music.title + (music.artist ? ' - ' + music.artist : '') + ']' : ''),
+    if (!placeholder) {
+      console.error("[ai-comment] placeholder creation failed for post", newPost.id)
+      return
+    }
+
+    var commentText = await generateAiComment({
+      post: newPost,
       philosopher: philosopher,
       apiKey: apiKey,
       commentTone: getCommentTone(),
-      commentLength: getCommentLength(),
-      location: location || '',
-      tags: tags || []
-    }).then(function(commentText) {
-      updateAiComment(post.id, placeholder.id, commentText, false)
-      loadData()
-    }).catch(function() {
-      updateAiComment(post.id, placeholder.id, '先贤暂时沉默，请稍后再试。', false)
-      loadData()
+      commentLength: getCommentLength()
     })
+
+    updateAiComment(newPost.id, placeholder.id, commentText, false)
+    loadData()
+  } catch (error) {
+    console.error("[ai-comment] failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+    if (placeholder && placeholder.id) {
+      try {
+        updateAiComment(newPost.id, placeholder.id, '先贤暂时沉默，请稍后再试。', false)
+        loadData()
+      } catch (e) {
+        // ignore
+      }
+    }
   }
 }
 
@@ -333,27 +496,69 @@ function handleReplyToAi({ postId, commentId, content, aiCharacter }) {
 }
 
 function toggleLike(postId) {
-  const post = posts.value.find(p => p.id === postId)
-  if (!post) return
-  const liked = !post.liked
-  const likeCount = post.likeCount + (liked ? 1 : -1)
-  updatePost(postId, { liked, likeCount })
-  loadData()
+  try {
+    togglePostLike(postId)
+    loadData()
+  } catch (error) {
+    console.error("[like] failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+    showToast(error instanceof Error ? error.message : "操作失败，请稍后重试。")
+  }
 }
 
 function handleAddComment(postId, content) {
-  addComment(postId, content)
-  loadData()
+  try {
+    addComment(postId, content)
+    loadData()
+  } catch (error) {
+    console.error("[comment] failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+    showToast(error instanceof Error ? error.message : "评论失败，请稍后重试。")
+  }
 }
 
 function handleDeletePost(postId) {
-  deletePost(postId)
-  loadData()
+  try {
+    console.log("[delete] App handler received:", postId)
+
+    var updatedPosts = deletePost(postId)
+
+    posts.value = updatedPosts.sort(function(a, b) {
+      return b.createdAt - a.createdAt
+    })
+
+    if (selectedPostId.value === postId || String(selectedPostId.value) === String(postId)) {
+      selectedPostId.value = null
+    }
+
+    deleteStoredDirectory('posts/' + String(postId)).catch(function(e) {
+      console.warn("[delete] cleanup files failed", { postId, error: e?.message })
+    })
+  } catch (error) {
+    console.error("[delete] failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+
+    showToast(error instanceof Error ? error.message : "删除失败，请稍后重试")
+  }
 }
 
 function handleDeleteComment(postId, commentId) {
-  deleteComment(postId, commentId)
-  loadData()
+  try {
+    deleteComment(postId, commentId)
+    loadData()
+  } catch (error) {
+    console.error("[delete] comment failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+    showToast("删除评论失败，请稍后重试")
+  }
 }
 
 function openPhilosopherCard(idOrName) {
@@ -397,15 +602,32 @@ function handleEditPost(postId) {
 }
 
 function handleEditSave(patch) {
-  updatePostContent(editingPostId.value, patch)
-  editingPostId.value = null
-  editingPost.value = null
-  loadData()
+  try {
+    updatePostContent(editingPostId.value, patch)
+    editingPostId.value = null
+    editingPost.value = null
+    loadData()
+  } catch (error) {
+    console.error("[edit] save failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+    showToast(error instanceof Error ? error.message : "修改未保存，请稍后重试。")
+  }
 }
 
 function handleEditCancel() {
   editingPostId.value = null
   editingPost.value = null
+}
+
+function showToast(message) {
+  toastMessage.value = message
+  setTimeout(function() {
+    if (toastMessage.value === message) {
+      toastMessage.value = ''
+    }
+  }, 4000)
 }
 
 function openPostDetail(postId) {
@@ -417,9 +639,28 @@ function closePostDetail() {
 }
 
 function handleDeletePostFromDetail(postId) {
-  deletePost(postId)
-  selectedPostId.value = null
-  loadData()
+  try {
+    console.log("[delete] detail handler received:", postId)
+
+    var updatedPosts = deletePost(postId)
+
+    posts.value = updatedPosts.sort(function(a, b) {
+      return b.createdAt - a.createdAt
+    })
+
+    selectedPostId.value = null
+
+    deleteStoredDirectory('posts/' + String(postId)).catch(function(e) {
+      console.warn("[delete] cleanup files failed", { postId, error: e?.message })
+    })
+  } catch (error) {
+    console.error("[delete] detail failed", {
+      name: error ? error.name : undefined,
+      message: error ? error.message : undefined
+    })
+
+    showToast(error instanceof Error ? error.message : "删除失败，请稍后重试")
+  }
 }
 
 function filterByTag(tag) {
@@ -441,8 +682,7 @@ function clearDate() {
 onMounted(() => {
   loadProfile()
   loadData()
-  generateDailySagePostIfNeeded()
-  loadData()
+  logStorageStats()
 })
 </script>
 
@@ -458,5 +698,19 @@ onMounted(() => {
 
 @media (max-width: 600px) {
   .app-main-inner { padding: 10px 8px 20px; }
+}
+
+.toast-message {
+  position: fixed; bottom: 80px; left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.78);
+  color: #fff; padding: 12px 24px; border-radius: 8px;
+  font-size: 14px; z-index: 1000; max-width: 90%;
+  text-align: center; cursor: pointer;
+  animation: toast-in 0.3s ease;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 </style>

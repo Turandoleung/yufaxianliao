@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<template>
   <div class="settings-overlay" @click.self="handleClose">
     <div class="settings-modal">
       <div class="settings-header">
@@ -164,11 +164,27 @@
           <label class="section-label">数据管理</label>
           <p class="section-hint">导出或导入本地数据，避免更新 App 或换手机时数据丢失。导出文件默认不包含 DeepSeek API Key。</p>
           <div class="backup-actions">
-            <button class="backup-btn" @click="handleExportBackup">导出数据</button>
+            <button class="backup-btn" :disabled="isExporting" @click="handleExportBackup">{{ isExporting ? '正在导出…' : '导出数据' }}</button>
             <button class="backup-btn backup-import-btn" @click="handleImportBackup">导入数据</button>
           </div>
+          <button class="reset-btn" @click="handleClearAllData">清除所有数据</button>
           <input ref="backupFileInput" type="file" accept=".json,application/json" style="display:none" @change="onBackupFileSelected" />
           <p v-if="backupResult" class="backup-result">{{ backupResult }}</p>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="settings-section">
+          <label class="section-label">旧图片数据迁移</label>
+          <p class="section-hint">将旧头像、背景图、动态图片、音乐封面和草稿图片迁移到手机文件存储，释放本地数据库空间。迁移前建议先导出数据备份。</p>
+          <button
+            class="migrate-btn"
+            :disabled="isMigrating"
+            @click="handleMigrateImages"
+          >
+            {{ isMigrating ? '迁移中...' : '迁移旧图片数据' }}
+          </button>
+          <p v-if="migrateResult" class="backup-result" :class="{ 'migrate-error': migrateError }">{{ migrateResult }}</p>
         </div>
 
         <div v-if="enableDailySagePost && dailySageMode === 'pool'" class="settings-section pool-section">
@@ -201,8 +217,10 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { getSettings, saveSettings, getDailySageMode, getPoolStats, addItemsToPool, clearUsedPoolItems } from '../services/settingsService.js'
-import { downloadBackup, importBackup } from '../services/backupService.js'
+import { exportBackup, importBackup } from '../services/backupService.js'
 import { parseImportedQuotes, mergeImportedQuotes, getImportedQuoteCount, clearImportedQuotes, resetImportedQuotesUsage } from '../services/dailyQuoteImportService.js'
+import { migrateLegacyImages } from '../services/migrateService.js'
+import { isNativePlatform } from '../services/fileStorageService.js'
 import { philosophers } from '../data/philosophers.js'
 import { generateDailySagePoolItems } from '../services/aiService.js'
 
@@ -227,7 +245,11 @@ const localImportResult = ref('')
 const fileInput = ref(null)
 const showResetConfirm = ref(false)
 const backupResult = ref('')
+const isExporting = ref(false)
 const backupFileInput = ref(null)
+const isMigrating = ref(false)
+const migrateResult = ref('')
+const migrateError = ref(false)
 
 const localQuotesTemplate = JSON.stringify([
   {
@@ -383,17 +405,57 @@ function handleClose() {
   emit('close')
 }
 
-function handleExportBackup() {
+async function handleExportBackup() {
+  if (isExporting.value) return
+  isExporting.value = true
+  backupResult.value = ''
   try {
-    downloadBackup()
-    backupResult.value = '导出成功'
+    console.log("[backup] export button clicked")
+    await exportBackup()
+    backupResult.value = '备份文件已生成，请选择保存位置或分享方式。'
   } catch (e) {
-    backupResult.value = '导出失败：' + (e.message || '请稍后再试')
+    console.error("[backup] export failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined,
+      stack: e ? e.stack : undefined
+    })
+    backupResult.value = '导出失败，请稍后重试。'
+  } finally {
+    isExporting.value = false
   }
 }
 
 function handleImportBackup() {
   backupFileInput.value.click()
+}
+
+function handleClearAllData() {
+  if (!confirm('确定要清除所有本地数据吗？\n\n此操作将删除所有动态、评论、头像和设置，无法恢复！\n\n建议先导出数据备份。')) return
+  if (!confirm('再次确认：真的要清除所有数据吗？')) return
+
+  var keys = [
+    'xianxianquan_posts',
+    'xianxianquan_profile',
+    'xianxianquan_settings',
+    'xianxianquan_post_draft',
+    'xianxianquan_daily_sage_pool',
+    'xianxianquan_imported_daily_quotes'
+  ]
+
+  var failedKeys = []
+  for (var i = 0; i < keys.length; i++) {
+    try {
+      localStorage.removeItem(keys[i])
+    } catch (e) {
+      failedKeys.push(keys[i])
+    }
+  }
+
+  if (failedKeys.length > 0) {
+    backupResult.value = '部分数据清除失败，请重新打开 App 后再试。'
+  } else {
+    location.reload()
+  }
 }
 
 function onBackupFileSelected(e) {
@@ -415,6 +477,43 @@ function onBackupFileSelected(e) {
   }
   reader.readAsText(file)
   e.target.value = ''
+}
+
+async function handleMigrateImages() {
+  if (!isNativePlatform()) {
+    migrateResult.value = '网页端不需要迁移，此功能仅适用于 Android App。'
+    migrateError.value = true
+    return
+  }
+
+  if (!confirm('迁移前建议先导出数据备份。\n\n确定开始迁移旧图片数据吗？')) {
+    return
+  }
+
+  isMigrating.value = true
+  migrateResult.value = ''
+  migrateError.value = false
+
+  try {
+    var result = await migrateLegacyImages(function(progress) {
+      if (progress.stage === 'done') return
+      migrateResult.value = '正在迁移：' + progress.stage
+        + '（已迁移 ' + progress.migratedCount + '，失败 ' + progress.failedCount + '，跳过 ' + progress.skippedCount + '）'
+    })
+
+    if (result.failedCount === 0) {
+      migrateResult.value = '旧图片迁移完成！已迁移 ' + result.migratedCount + ' 张图片，已释放本地存储空间。'
+      migrateError.value = false
+    } else {
+      migrateResult.value = '迁移完成：成功 ' + result.migratedCount + ' 张，失败 ' + result.failedCount + ' 张，跳过 ' + result.skippedCount + ' 张。失败的原数据已保留。'
+      migrateError.value = true
+    }
+  } catch (e) {
+    migrateResult.value = '迁移失败：' + (e.message || '请稍后重试')
+    migrateError.value = true
+  } finally {
+    isMigrating.value = false
+  }
 }
 </script>
 
@@ -536,6 +635,7 @@ function onBackupFileSelected(e) {
   transition: background-color 0.2s;
 }
 .backup-btn:hover { background-color: #4a5d82; }
+.backup-btn:disabled { background-color: #a0aec0; cursor: not-allowed; }
 .backup-import-btn { background-color: #C9A96E; }
 .backup-import-btn:hover { background-color: #b8944f; }
 .backup-result {
@@ -543,6 +643,18 @@ function onBackupFileSelected(e) {
   margin-top: 8px;
   color: #07C160;
 }
+.reset-btn {
+  background-color: #e74c3c;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: background-color 0.2s;
+}
+.reset-btn:hover { background-color: #c0392b; }
 .backup-actions {
   display: flex;
   gap: 8px;
@@ -589,6 +701,20 @@ function onBackupFileSelected(e) {
   margin-top: 8px;
   color: #07C160;
 }
+.migrate-btn {
+  background-color: #e67e22;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  margin-top: 8px;
+}
+.migrate-btn:hover { background-color: #d35400; }
+.migrate-btn:disabled { background-color: #f0c090; cursor: not-allowed; }
+.migrate-error { color: #e74c3c !important; }
 .pool-supply-btn:disabled { background-color: #ddd; cursor: not-allowed; }
 .pool-clear-btn {
   background: none; border: 1px solid #ddd; border-radius: 8px;

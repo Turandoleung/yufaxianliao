@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="music-card" @click="handleClick">
     <div class="music-cover-wrap">
-      <img v-if="music && music.cover" :src="music.cover" alt="" class="music-cover" />
+      <img v-if="music && music.cover" :src="displayCover" alt="" class="music-cover" />
       <div v-else class="music-cover-placeholder">&#9835;</div>
     </div>
     <div class="music-info">
@@ -14,7 +14,13 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
+import { useImageUrl } from '../composables/useImageUrl.js'
+
 const props = defineProps({ music: Object })
+
+const coverRef = computed(() => (props.music && props.music.cover) || '')
+const displayCover = useImageUrl(coverRef)
 
 function handleClick() {
   if (props.music && props.music.url) {

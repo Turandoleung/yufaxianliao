@@ -1,4 +1,5 @@
 import { philosophers } from '../data/philosophers.js'
+import { safeSetJson, safeGetJson, safeRemoveItem } from './storageService.js'
 
 const IMPORTED_QUOTES_KEY = 'xianxianquan_imported_daily_quotes'
 
@@ -99,16 +100,21 @@ export function dedupeImportedQuotes(existingQuotes, newQuotes) {
 
 export function getImportedQuotes() {
   try {
-    var data = localStorage.getItem(IMPORTED_QUOTES_KEY)
+    var data = safeGetJson(IMPORTED_QUOTES_KEY)
     if (!data) return []
-    var arr = JSON.parse(data)
-    if (!Array.isArray(arr)) return []
-    return arr
-  } catch { return [] }
+    if (!Array.isArray(data)) return []
+    return data
+  } catch (e) {
+    console.error("[quotes] getImportedQuotes failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
+    return []
+  }
 }
 
 export function saveImportedQuotes(quotes) {
-  localStorage.setItem(IMPORTED_QUOTES_KEY, JSON.stringify(quotes))
+  safeSetJson(IMPORTED_QUOTES_KEY, quotes)
 }
 
 export function mergeImportedQuotes(newQuotes) {
@@ -136,7 +142,7 @@ export function getAvailableImportedQuotes() {
 }
 
 export function clearImportedQuotes() {
-  localStorage.removeItem(IMPORTED_QUOTES_KEY)
+  safeRemoveItem(IMPORTED_QUOTES_KEY)
 }
 
 export function resetImportedQuotesUsage() {

@@ -1,4 +1,6 @@
-﻿const PROFILE_KEY = 'xianxianquan_profile'
+﻿import { safeSetJson, safeGetJson } from './storageService.js'
+
+const PROFILE_KEY = 'xianxianquan_profile'
 
 const defaultProfile = {
   nickname: '我',
@@ -9,18 +11,22 @@ const defaultProfile = {
 
 export function getProfile() {
   try {
-    const data = localStorage.getItem(PROFILE_KEY)
+    const data = safeGetJson(PROFILE_KEY)
     if (data) {
-      return { ...defaultProfile, ...JSON.parse(data) }
+      return { ...defaultProfile, ...data }
     }
     return { ...defaultProfile }
-  } catch {
+  } catch (e) {
+    console.error("[profile] getProfile failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
     return { ...defaultProfile }
   }
 }
 
 export function saveProfile(profile) {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile))
+  safeSetJson(PROFILE_KEY, profile)
 }
 
 export function updateProfile(patch) {

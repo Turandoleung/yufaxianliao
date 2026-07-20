@@ -1,4 +1,6 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿const SETTINGS_KEY = 'xianxianquan_settings'
+﻿﻿import { safeSetJson, safeGetJson } from './storageService.js'
+
+const SETTINGS_KEY = 'xianxianquan_settings'
 const POOL_KEY = 'xianxianquan_daily_sage_pool'
 
 const defaultSettings = {
@@ -15,13 +17,21 @@ const defaultSettings = {
 
 export function getSettings() {
   try {
-    const data = localStorage.getItem(SETTINGS_KEY)
-    if (data) return { ...defaultSettings, ...JSON.parse(data) }
+    const data = safeGetJson(SETTINGS_KEY)
+    if (data) return { ...defaultSettings, ...data }
     return { ...defaultSettings }
-  } catch { return { ...defaultSettings } }
+  } catch (e) {
+    console.error("[settings] getSettings failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
+    return { ...defaultSettings }
+  }
 }
 
-export function saveSettings(settings) { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) }
+export function saveSettings(settings) {
+  safeSetJson(SETTINGS_KEY, settings)
+}
 
 export function getApiKey() { return getSettings().deepseekApiKey || '' }
 
@@ -67,16 +77,22 @@ export function getCommentLength() {
 
 export function getDailySagePool() {
   try {
-    const data = localStorage.getItem(POOL_KEY)
+    const data = safeGetJson(POOL_KEY)
     if (!data) return []
-    var arr = JSON.parse(data)
+    var arr = data
     if (!Array.isArray(arr)) return []
     return arr
-  } catch { return [] }
+  } catch (e) {
+    console.error("[settings] getDailySagePool failed", {
+      name: e ? e.name : undefined,
+      message: e ? e.message : undefined
+    })
+    return []
+  }
 }
 
 export function saveDailySagePool(pool) {
-  localStorage.setItem(POOL_KEY, JSON.stringify(pool))
+  safeSetJson(POOL_KEY, pool)
 }
 
 export function addItemsToPool(items) {

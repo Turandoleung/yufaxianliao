@@ -1,5 +1,5 @@
-﻿﻿﻿﻿﻿import { philosophers } from '../data/philosophers.js'
-import { getPosts } from './postService.js'
+﻿﻿﻿﻿﻿﻿﻿﻿﻿import { philosophers } from '../data/philosophers.js'
+import { getPosts, savePosts } from './postService.js'
 import {
   getSettings, saveSettings,
   isDailySageEnabled, getDailySageMode,
@@ -115,13 +115,13 @@ function savePostToStorage(postData) {
   postData.likeCount = 0
   postData.likedBy = []
   postData.comments = []
-  postData.tags = result.tags || []
+  postData.tags = postData.tags || []
 
   var allPosts = getPosts()
   var exists = allPosts.find(function(p) { return p.id === postData.id })
   if (!exists) {
     allPosts.push(postData)
-    localStorage.setItem('xianxianquan_posts', JSON.stringify(allPosts))
+    savePosts(allPosts)
   }
   return postData
 }
@@ -182,11 +182,26 @@ export function generateDailySagePostIfNeeded() {
   var exists = allPosts.find(function(p) { return p.id === postData.id })
   if (!exists) {
     allPosts.push(postData)
-    localStorage.setItem('xianxianquan_posts', JSON.stringify(allPosts))
+    savePosts(allPosts)
   }
 
   settings.dailySageLastDate = todayKey
   saveSettings(settings)
 
   return postData
+}
+
+var dailySageGenerating = false
+
+export function triggerDailySageAfterUserPost() {
+  if (dailySageGenerating) return null
+
+  dailySageGenerating = true
+
+  try {
+    var result = generateDailySagePostIfNeeded()
+    return result
+  } finally {
+    dailySageGenerating = false
+  }
 }
