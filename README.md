@@ -180,4 +180,3 @@ npx cap open android
 ## License
 
 Private
-```
